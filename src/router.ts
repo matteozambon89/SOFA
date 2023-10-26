@@ -330,6 +330,7 @@ function getRouteSchemas({
   };
 
   for (const variable of info!.variables) {
+    const varName = variable.variable.name.value;
     let varSchema = resolveParamSchema(variable.type, {
       schema: sofa.schema,
       customScalars: sofa.customScalars,
@@ -353,7 +354,6 @@ function getRouteSchemas({
         exampleDirectiveParser: sofa.exampleDirectiveParser,
       });
     }
-    const varName = variable.variable.name.value;
     const varObj = isInPath(path, varName) ? params : query;
     varObj.properties[varName] = varSchema;
     if (variable.type.kind === Kind.NON_NULL_TYPE) {
