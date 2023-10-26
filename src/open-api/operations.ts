@@ -1,5 +1,4 @@
 import {
-  DocumentNode,
   FieldNode,
   GraphQLSchema,
   isEnumType,
@@ -13,10 +12,11 @@ import {
 } from 'graphql';
 
 import { getOperationInfo } from '../ast';
-import { mapToPrimitive, mapToRef } from './utils';
+import { addExampleFromDirective, mapToPrimitive, mapToRef } from './utils';
 import { resolveFieldType } from './types';
 import { titleCase } from 'title-case';
 import { OpenAPIV3 } from 'openapi-types';
+import { OpenAPIBuildPathFromOperationOpts } from '../types';
 
 export function buildPathFromOperation({
   url,
@@ -26,15 +26,9 @@ export function buildPathFromOperation({
   tags,
   description,
   customScalars,
-}: {
-  url: string;
-  schema: GraphQLSchema;
-  operation: DocumentNode;
-  useRequestBody: boolean;
-  tags?: string[];
-  description?: string;
-  customScalars: Record<string, any>;
-}): OpenAPIV3.OperationObject {
+  exampleDirective,
+  exampleDirectiveParser,
+}: OpenAPIBuildPathFromOperationOpts): OpenAPIV3.OperationObject {
   const info = getOperationInfo(operation)!;
   const enumTypes = resolveEnumTypes(schema);
 
@@ -59,17 +53,22 @@ export function buildPathFromOperation({
             pathParams,
             schema,
             info.operation,
-            { customScalars, enumTypes }
+            {
+              customScalars,
+              enumTypes,
+              exampleDirective,
+              exampleDirectiveParser,
+            }
           ),
           requestBody: {
             content: {
               'application/json': {
-                schema: resolveRequestBody(
-                  bodyParams,
-                  schema,
-                  info.operation,
-                  { customScalars, enumTypes }
-                ),
+                schema: resolveRequestBody(bodyParams, schema, info.operation, {
+                  customScalars,
+                  enumTypes,
+                  exampleDirective,
+                  exampleDirectiveParser,
+                }),
               },
             },
           },
@@ -80,7 +79,12 @@ export function buildPathFromOperation({
             variables,
             schema,
             info.operation,
-            { customScalars, enumTypes }
+            {
+              customScalars,
+              enumTypes,
+              exampleDirective,
+              exampleDirectiveParser,
+            }
           ),
         }),
     responses: {
@@ -91,7 +95,11 @@ export function buildPathFromOperation({
             schema: resolveResponse({
               schema,
               operation: info.operation,
-              opts: { customScalars, enumTypes },
+              opts: {
+                customScalars,
+                exampleDirective,
+                exampleDirectiveParser,
+              },
             }),
           },
         },
@@ -101,8 +109,7 @@ export function buildPathFromOperation({
 }
 
 function resolveEnumTypes(schema: GraphQLSchema): Record<string, any> {
-  const enumTypes = Object.values(schema.getTypeMap())
-    .filter(isEnumType)
+  const enumTypes = Object.values(schema.getTypeMap()).filter(isEnumType);
   return Object.fromEntries(
     enumTypes.map((type) => [
       type.name,
@@ -119,7 +126,10 @@ function resolveParameters(
   variables: ReadonlyArray<VariableDefinitionNode> | undefined,
   schema: GraphQLSchema,
   operation: OperationDefinitionNode,
-  opts: { customScalars: Record<string, any>; enumTypes: Record<string, any> }
+  opts: Pick<
+    OpenAPIBuildPathFromOperationOpts,
+    'customScalars' | 'exampleDirective' | 'exampleDirectiveParser'
+  > & { enumTypes: Record<string, any> }
 ) {
   if (!variables) {
     return [];
@@ -130,7 +140,7 @@ function resolveParameters(
       in: isInPath(url, variable.variable.name.value) ? 'path' : 'query',
       name: variable.variable.name.value,
       required: variable.type.kind === Kind.NON_NULL_TYPE,
-      schema: resolveParamSchema(variable.type, opts),
+      schema: resolveParamSchema(variable.type, { schema, ...opts }),
       description: resolveVariableDescription(schema, operation, variable),
     };
   });
@@ -140,7 +150,10 @@ export function resolveRequestBody(
   variables: ReadonlyArray<VariableDefinitionNode> | undefined,
   schema: GraphQLSchema,
   operation: OperationDefinitionNode,
-  opts: { customScalars: Record<string, any>; enumTypes: Record<string, any> }
+  opts: Pick<
+    OpenAPIBuildPathFromOperationOpts,
+    'customScalars' | 'exampleDirective' | 'exampleDirectiveParser'
+  > & { enumTypes: Record<string, any> }
 ) {
   if (!variables) {
     return {};
@@ -155,7 +168,7 @@ export function resolveRequestBody(
     }
 
     properties[variable.variable.name.value] = {
-      ...resolveParamSchema(variable.type, opts),
+      ...resolveParamSchema(variable.type, { schema, ...opts }),
       description: resolveVariableDescription(schema, operation, variable),
     };
   });
@@ -172,24 +185,30 @@ export function resolveRequestBody(
 // scalar -> swagger primitive
 export function resolveParamSchema(
   type: TypeNode,
-  opts: { customScalars: Record<string, any>; enumTypes: Record<string, any> }
+  opts: Pick<
+    OpenAPIBuildPathFromOperationOpts,
+    'schema' | 'customScalars' | 'exampleDirective' | 'exampleDirectiveParser'
+  > & { enumTypes: Record<string, any> }
 ): any {
   if (type.kind === Kind.NON_NULL_TYPE) {
     return resolveParamSchema(type.type, opts);
   }
 
   if (type.kind === Kind.LIST_TYPE) {
+    let items = resolveParamSchema(type.type, opts);
+    items = addExampleFromDirective(items, type.type, opts);
     return {
       type: 'array',
-      items: resolveParamSchema(type.type, opts),
+      items,
     };
   }
 
-  const primitive = mapToPrimitive(type.name.value);
+  if (opts.customScalars[type.name.value]) {
+    return { $ref: mapToRef(type.name.value) };
+  }
 
   return (
-    primitive ||
-    opts.customScalars[type.name.value] ||
+    mapToPrimitive(type.name.value) ||
     opts.enumTypes[type.name.value] || { $ref: mapToRef(type.name.value) }
   );
 }
@@ -201,7 +220,10 @@ export function resolveResponse({
 }: {
   schema: GraphQLSchema;
   operation: OperationDefinitionNode;
-  opts: { customScalars: Record<string, any>; enumTypes: Record<string, any> };
+  opts: Pick<
+    OpenAPIBuildPathFromOperationOpts,
+    'customScalars' | 'exampleDirective' | 'exampleDirectiveParser'
+  >;
 }) {
   const operationType = operation.operation;
   const rootField = operation.selectionSet.selections[0];
@@ -211,14 +233,14 @@ export function resolveResponse({
       const queryType = schema.getQueryType()!;
       const field = queryType.getFields()[rootField.name.value];
 
-      return resolveFieldType(field.type, opts);
+      return resolveFieldType(field.type, { schema, ...opts });
     }
 
     if (operationType === 'mutation') {
       const mutationType = schema.getMutationType()!;
       const field = mutationType.getFields()[rootField.name.value];
 
-      return resolveFieldType(field.type, opts);
+      return resolveFieldType(field.type, { schema, ...opts });
     }
   }
 }

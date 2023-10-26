@@ -10,11 +10,15 @@ import {
   isEnumType,
   GraphQLType,
 } from 'graphql';
-import { mapToPrimitive, mapToRef } from './utils';
+import { addExampleFromDirective, mapToPrimitive, mapToRef } from './utils';
+import { Sofa } from '../sofa';
 
 export function buildSchemaObjectFromType(
   type: GraphQLObjectType | GraphQLInputObjectType,
-  opts: { customScalars: Record<string, any> }
+  opts: Pick<
+    Sofa,
+    'schema' | 'customScalars' | 'exampleDirective' | 'exampleDirectiveParser'
+  >
 ): any {
   const required: string[] = [];
   const properties: Record<string, any> = {};
@@ -32,6 +36,12 @@ export function buildSchemaObjectFromType(
     if (field.description) {
       properties[fieldName].description = field.description;
     }
+
+    properties[fieldName] = addExampleFromDirective(
+      properties[fieldName],
+      field,
+      opts
+    );
   }
 
   return {
@@ -44,7 +54,10 @@ export function buildSchemaObjectFromType(
 
 function resolveField(
   field: GraphQLField<any, any> | GraphQLInputField,
-  opts: { customScalars: Record<string, any> }
+  opts: Pick<
+    Sofa,
+    'schema' | 'customScalars' | 'exampleDirective' | 'exampleDirectiveParser'
+  >
 ) {
   return resolveFieldType(field.type, opts);
 }
@@ -54,16 +67,28 @@ function resolveField(
 // scalar -> swagger primitive
 export function resolveFieldType(
   type: GraphQLType,
-  opts: { customScalars: Record<string, any> }
+  opts: Pick<
+    Sofa,
+    'schema' | 'customScalars' | 'exampleDirective' | 'exampleDirectiveParser'
+  >
 ): any {
   if (isNonNullType(type)) {
     return resolveFieldType(type.ofType, opts);
   }
 
   if (isListType(type)) {
+    let items = resolveFieldType(type.ofType, opts);
+    items = addExampleFromDirective(items, type.ofType, opts);
+
     return {
       type: 'array',
-      items: resolveFieldType(type.ofType, opts),
+      items,
+    };
+  }
+
+  if (opts.customScalars[type.name]) {
+    return {
+      $ref: mapToRef(type.name),
     };
   }
 
@@ -75,7 +100,6 @@ export function resolveFieldType(
 
   if (isScalarType(type)) {
     const resolved = mapToPrimitive(type.name) ||
-      opts.customScalars[type.name] ||
       type.extensions?.jsonSchema || {
         type: 'object',
       };

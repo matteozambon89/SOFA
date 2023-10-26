@@ -10,7 +10,12 @@ import {
   execute,
 } from 'graphql';
 
-import { Ignore, ContextFn, ContextValue } from './types';
+import {
+  Ignore,
+  ContextFn,
+  ContextValue,
+  ExampleDirectiveParser,
+} from './types';
 import { convertName } from './common';
 import { logger } from './logger';
 import { ErrorHandler } from './router';
@@ -56,7 +61,9 @@ export interface SofaConfig {
   context?: ContextFn | ContextValue;
   customScalars?: Record<string, any>;
   enumTypes?: Record<string, any>;
-  
+  exampleDirective?: string;
+  exampleDirectiveParser?: ExampleDirectiveParser;
+
   openAPI?: RouterOpenAPIOptions<any>;
   swaggerUI?: RouterSwaggerUIOptions;
 }
@@ -72,8 +79,10 @@ export interface Sofa {
   subscribe: typeof subscribe;
   errorHandler?: ErrorHandler;
   contextFactory: ContextFn;
-  customScalars: Record<string, any>
-  enumTypes: Record<string, any>
+  customScalars: Record<string, any>;
+  enumTypes: Record<string, any>;
+  exampleDirective?: string;
+  exampleDirectiveParser?: ExampleDirectiveParser;
 
   openAPI?: RouterOpenAPIOptions<any>;
   swaggerUI?: RouterSwaggerUIOptions;

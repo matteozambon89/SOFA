@@ -6,8 +6,12 @@ import {
   OperationTypeNode,
   isIntrospectionType,
   isInputObjectType,
+  GraphQLField,
 } from 'graphql';
-import { buildOperationNodeForField, createGraphQLError } from '@graphql-tools/utils';
+import {
+  buildOperationNodeForField,
+  createGraphQLError,
+} from '@graphql-tools/utils';
 import { getOperationInfo, OperationInfo } from './ast';
 import type { Sofa, Route } from './sofa';
 import type { RouteInfo, DefaultSofaServerContext } from './types';
@@ -24,8 +28,15 @@ import {
   RouteSchemas,
 } from 'fets';
 import { HTTPMethod, StatusCode } from 'fets/typings/typed-fetch';
-import { isInPath, resolveParamSchema, resolveRequestBody, resolveResponse, resolveVariableDescription } from './open-api/operations';
+import {
+  isInPath,
+  resolveParamSchema,
+  resolveRequestBody,
+  resolveResponse,
+  resolveVariableDescription,
+} from './open-api/operations';
 import { buildSchemaObjectFromType } from './open-api/types';
+import { addExampleFromDirective } from './open-api/utils';
 
 export type ErrorHandler = (errors: ReadonlyArray<any>) => Response;
 
@@ -40,7 +51,6 @@ declare module 'graphql' {
   }
 }
 
-
 const defaultErrorHandler: ErrorHandler = (errors) => {
   let status: StatusCode | undefined;
   const headers: Record<string, string> = {
@@ -48,11 +58,7 @@ const defaultErrorHandler: ErrorHandler = (errors) => {
   };
 
   for (const error of errors) {
-    if (
-      typeof error === 'object' &&
-      error != null &&
-      error.extensions?.http
-    ) {
+    if (typeof error === 'object' && error != null && error.extensions?.http) {
       if (
         error.extensions.http.status &&
         (!status || error.extensions.http.status > status)
@@ -70,13 +76,18 @@ const defaultErrorHandler: ErrorHandler = (errors) => {
     status = 500;
   }
 
-  return Response.json({ errors }, {
-    status,
-    headers,
-  })
+  return Response.json(
+    { errors },
+    {
+      status,
+      headers,
+    }
+  );
 };
 
-function useRequestBody(method: HTTPMethod): method is 'POST' | 'PUT' | 'PATCH' {
+function useRequestBody(
+  method: HTTPMethod
+): method is 'POST' | 'PUT' | 'PATCH' {
   return method === 'POST' || method === 'PUT' || method === 'PATCH';
 }
 
@@ -99,12 +110,31 @@ export function createRouter(sofa: Sofa) {
       (isObjectType(type) || isInputObjectType(type)) &&
       !isIntrospectionType(type)
     ) {
-      sofa.openAPI!.components!.schemas![typeName] = buildSchemaObjectFromType(type, {
-        customScalars: sofa.customScalars,
-      });
+      sofa.openAPI!.components!.schemas![typeName] = buildSchemaObjectFromType(
+        type,
+        {
+          schema: sofa.schema,
+          customScalars: sofa.customScalars,
+          exampleDirective: sofa.exampleDirective,
+          exampleDirectiveParser: sofa.exampleDirectiveParser,
+        }
+      );
+    } else if (!isIntrospectionType(type) && sofa.customScalars[typeName]) {
+      //* This creates any customScalar as a component reducing the amount of duplication
+      sofa.openAPI.components.schemas[typeName] = addExampleFromDirective(
+        {
+          description: type.description,
+          ...sofa.customScalars[typeName],
+        },
+        type,
+        {
+          schema: sofa.schema,
+          exampleDirective: sofa.exampleDirective,
+          exampleDirectiveParser: sofa.exampleDirectiveParser,
+        }
+      );
     }
   }
-
 
   const router = createRouterInstance<any>({
     base: sofa.basePath,
@@ -135,9 +165,12 @@ export function createRouter(sofa: Sofa) {
       const { subscription, variables, url }: StartSubscriptionEvent =
         await request.json();
       try {
-        const sofaContext: DefaultSofaServerContext = Object.assign(serverContext, {
-          request,
-        })
+        const sofaContext: DefaultSofaServerContext = Object.assign(
+          serverContext,
+          {
+            request,
+          }
+        );
         const result = await subscriptionManager.start(
           {
             subscription,
@@ -153,8 +186,8 @@ export function createRouter(sofa: Sofa) {
           statusText: 'Subscription failed',
         });
       }
-    }
-  })
+    },
+  });
 
   router.route({
     path: '/webhook/:id',
@@ -182,8 +215,8 @@ export function createRouter(sofa: Sofa) {
           statusText: 'Subscription failed to update',
         });
       }
-    }
-  })
+    },
+  });
 
   router.route({
     path: '/webhook/:id',
@@ -199,9 +232,8 @@ export function createRouter(sofa: Sofa) {
           statusText: 'Subscription failed to stop',
         });
       }
-    }
-
-  })
+    },
+  });
 
   return router;
 }
@@ -250,6 +282,7 @@ function createQueryRoute({
     path: route.path,
     method: route.method,
     schemas: getRouteSchemas({
+      field,
       method: route.method,
       path: route.path,
       info,
@@ -257,7 +290,7 @@ function createQueryRoute({
       responseStatus: route.responseStatus,
     }),
     handler: useHandler({ info, route, fieldName, sofa, operation }),
-  })
+  });
 
   logger.debug(
     `[Router] ${fieldName} query available at ${route.method} ${route.path}`
@@ -273,19 +306,20 @@ function createQueryRoute({
 }
 
 function getRouteSchemas({
+  field,
   method,
   path,
   info,
   sofa,
   responseStatus,
 }: {
+  field: GraphQLField<any, any, any>;
   method: HTTPMethod;
   path: string;
   info: OperationInfo;
   sofa: Sofa;
   responseStatus: StatusCode;
 }): RouteSchemas {
-
   const params = {
     properties: {} as Record<string, any>,
     required: [] as string[],
@@ -296,11 +330,29 @@ function getRouteSchemas({
   };
 
   for (const variable of info!.variables) {
-    const varSchema = resolveParamSchema(variable.type, {
+    let varSchema = resolveParamSchema(variable.type, {
+      schema: sofa.schema,
       customScalars: sofa.customScalars,
       enumTypes: sofa.enumTypes,
-    })
-    varSchema.description = resolveVariableDescription(sofa.schema, info!.operation, variable);
+      exampleDirective: sofa.exampleDirective,
+      exampleDirectiveParser: sofa.exampleDirectiveParser,
+    });
+    varSchema.description = resolveVariableDescription(
+      sofa.schema,
+      info!.operation,
+      variable
+    );
+    //* Directive is available at the field level but not in the info level
+    //* This solution attempts to find the arg which matches the same name as the variable
+    //* If and only if the arg is matched then it'll be possible to extract the example
+    const arg = field?.args.find(({ name }) => name === varName);
+    if (arg) {
+      varSchema = addExampleFromDirective(varSchema, arg, {
+        schema: sofa.schema,
+        exampleDirective: sofa.exampleDirective,
+        exampleDirectiveParser: sofa.exampleDirectiveParser,
+      });
+    }
     const varName = variable.variable.name.value;
     const varObj = isInPath(path, varName) ? params : query;
     varObj.properties[varName] = varSchema;
@@ -310,15 +362,14 @@ function getRouteSchemas({
   }
   return {
     request: {
-      json: useRequestBody(method) ? resolveRequestBody(
-        info!.variables,
-        sofa.schema,
-        info!.operation,
-        {
-          customScalars: sofa.customScalars,
-          enumTypes: sofa.enumTypes,
-        }
-      ) : undefined,
+      json: useRequestBody(method)
+        ? resolveRequestBody(info!.variables, sofa.schema, info!.operation, {
+            customScalars: sofa.customScalars,
+            enumTypes: sofa.enumTypes,
+            exampleDirective: sofa.exampleDirective,
+            exampleDirectiveParser: sofa.exampleDirectiveParser,
+          })
+        : undefined,
       params,
       query,
     },
@@ -328,11 +379,12 @@ function getRouteSchemas({
         operation: info!.operation,
         opts: {
           customScalars: sofa.customScalars,
-          enumTypes: sofa.enumTypes,
-        }
-      })
-    }
-  }
+          exampleDirective: sofa.exampleDirective,
+          exampleDirectiveParser: sofa.exampleDirectiveParser,
+        },
+      }),
+    },
+  };
 }
 
 function createMutationRoute({
@@ -373,12 +425,13 @@ function createMutationRoute({
     method,
     path,
     responseStatus,
-  }
+  };
 
   router.route({
     method,
     path,
     schemas: getRouteSchemas({
+      field,
       method,
       path,
       info,
@@ -386,7 +439,7 @@ function createMutationRoute({
       sofa,
     }),
     handler: useHandler({ info, route, fieldName, sofa, operation }),
-  })
+  });
 
   logger.debug(`[Router] ${fieldName} mutation available at ${method} ${path}`);
 
@@ -408,13 +461,9 @@ function useHandler(config: {
 }): RouteHandler<{}, RouterRequest, any> {
   const { sofa, operation, fieldName } = config;
   const info = config.info!;
-  const errorHandler: ErrorHandler =
-    sofa.errorHandler || defaultErrorHandler;
+  const errorHandler: ErrorHandler = sofa.errorHandler || defaultErrorHandler;
 
-  return async (
-    request: RouterRequest,
-    serverContext: {},
-  ) => {
+  return async (request: RouterRequest, serverContext: {}) => {
     try {
       let body = {};
       if (request.body != null) {
@@ -427,8 +476,8 @@ function useHandler(config: {
               extensions: {
                 http: {
                   status: 400,
-                }
-              }
+                },
+              },
             });
           }
         }
@@ -463,12 +512,12 @@ function useHandler(config: {
           extensions: {
             http: {
               status: 400,
-            }
-          }
-        })
+            },
+          },
+        });
       }
 
-      const sofaContext: DefaultSofaServerContext = Object.assign(serverContext, {
+      const sofaContext = Object.assign(serverContext, {
         request,
       });
       const contextValue = await sofa.contextFactory(sofaContext);
@@ -486,7 +535,7 @@ function useHandler(config: {
 
       return Response.json(result.data?.[fieldName], {
         status: config.route.responseStatus,
-      })
+      });
     } catch (error: any) {
       return errorHandler([error]);
     }
