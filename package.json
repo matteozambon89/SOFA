@@ -23,10 +23,7 @@
         "default": "./dist/esm/index.js"
       }
     },
-    "./*": {
-      "require": "./dist/cjs/*.js",
-      "import": "./dist/esm/*.js"
-    }
+    "./package.json": "./package.json"
   },
   "typings": "dist/typings/index.d.ts",
   "typescript": {
@@ -64,8 +61,9 @@
   "scripts": {
     "start": "ts-node --project tsconfig.example.json example/index.ts",
     "clean": "rm -rf dist",
-    "prebuild": "yarn clean",
-    "build": "bob build --single",
+    "prebuild": "yarn clean && bob bootstrap",
+    "build": "bob build",
+    "postbuild": "git checkout -- .",
     "test": "jest --no-watchman",
     "release": "yarn build && changeset publish",
     "postinstall": "husky install"
