@@ -2,11 +2,9 @@
   "compilerOptions": {
     "experimentalDecorators": true,
     "module": "esnext",
-    "target": "es2021",
+    "target": "ES2019",
     "lib": ["esnext"],
     "moduleResolution": "node",
-    "sourceMap": true,
-    "inlineSources": true,
     "declaration": true,
     "strict": true,
     "noUnusedLocals": true,
