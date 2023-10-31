@@ -183,7 +183,6 @@ export function createRouter(sofa: Sofa) {
       } catch (error) {
         return Response.json(error, {
           status: 500,
-          statusText: 'Subscription failed',
         });
       }
     },
@@ -212,7 +211,6 @@ export function createRouter(sofa: Sofa) {
       } catch (error) {
         return Response.json(error, {
           status: 500,
-          statusText: 'Subscription failed to update',
         });
       }
     },
@@ -229,7 +227,6 @@ export function createRouter(sofa: Sofa) {
       } catch (error) {
         return Response.json(error, {
           status: 500,
-          statusText: 'Subscription failed to stop',
         });
       }
     },
@@ -271,6 +268,103 @@ export function createRouter(sofa: Sofa) {
               $ref: mapToRef('BatchItem'),
             },
             minItems: 1,
+            maxItems: sofa.batching.limit,
+          },
+        },
+        responses: {
+          200: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                status: {
+                  type: 'integer',
+                  example: 200,
+                  description: 'Response HTTP status code',
+                },
+                data: {
+                  description: 'Response body',
+                  oneOf: [
+                    {
+                      type: 'object',
+                      additionalProperties: true,
+                    },
+                    { type: 'array', items: {} },
+                  ],
+                  example: {
+                    id: '01tP0000009xZvO',
+                    featureCode: 'D001',
+                    name: 'Phone Consultation',
+                    type: 'Phone Consultation',
+                    group: 'Consultations',
+                    defaultCallDuration: 60,
+                    defaultShortCallDuration: 30,
+                  },
+                },
+                errors: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      message: {
+                        type: 'string',
+                        description: 'Error message',
+                      },
+                    },
+                    required: ['message'],
+                    additionalProperties: true,
+                  },
+                  minItems: 1,
+                  maxItems: 1,
+                  example: [
+                    {
+                      message:
+                        'Product not found for given account and feature code',
+                      path: ['product'],
+                      extensions: {
+                        status: 'product_not_found_failure',
+                        metadata: {
+                          accountId: '001P0000020mmYFAKE',
+                          featureCode: 'D001',
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+              requires: ['status'],
+            },
+          },
+          413: {
+            type: 'object',
+            properties: {
+              errors: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    message: {
+                      type: 'string',
+                      description: 'Error message',
+                    },
+                  },
+                  required: ['message'],
+                },
+                minItems: 1,
+                maxItems: 1,
+                example: [
+                  {
+                    errors: [
+                      {
+                        message:
+                          'Batching is limited to X operations per request.',
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+            required: ['errors'],
           },
         },
       },
@@ -278,15 +372,15 @@ export function createRouter(sofa: Sofa) {
         const body = await request.json();
 
         if (body.length > sofa.batching.limit) {
-          return Response.json(
+          throw createGraphQLError(
+            `Batching is limited to ${sofa.batching.limit} operations per request.`,
             {
-              errors: [
-                {
-                  message: `Batching is limited to ${sofa.batching.limit} operations per request.`,
+              extensions: {
+                http: {
+                  status: 413,
                 },
-              ],
-            },
-            { status: 413 }
+              },
+            }
           );
         }
 
@@ -323,10 +417,19 @@ export function createRouter(sofa: Sofa) {
               serverContext
             );
 
+            if (res.status >= 300 && res.status < 400) {
+              return {
+                status: 404,
+                errors: [{ message: 'Request Not Found' }],
+              };
+            }
+
+            console.log('res', JSON.stringify(res));
+
             const body = res.body ? await res.json() : {};
 
             const errors = body.errors || undefined;
-            const data = body.errors ? null : body;
+            const data = !body.errors ? body : undefined;
 
             const responseBody = {
               status: res.status,
