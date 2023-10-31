@@ -64,6 +64,7 @@
     "prebuild": "yarn clean && bob bootstrap",
     "build": "bob build",
     "postbuild": "git checkout -- .",
+    "build:local": "rm -rf dist/* && bob bootstrap && bob build && git checkout -- .",
     "test": "jest --no-watchman",
     "release": "yarn build && changeset publish",
     "postinstall": "husky install"
