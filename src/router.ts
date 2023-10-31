@@ -36,7 +36,7 @@ import {
   resolveVariableDescription,
 } from './open-api/operations';
 import { buildSchemaObjectFromType } from './open-api/types';
-import { addExampleFromDirective } from './open-api/utils';
+import { addExampleFromDirective, mapToRef } from './open-api/utils';
 
 export type ErrorHandler = (errors: ReadonlyArray<any>) => Response;
 
@@ -234,6 +234,99 @@ export function createRouter(sofa: Sofa) {
       }
     },
   });
+
+  if (sofa.batching.enabled) {
+    sofa.openAPI.components.schemas['BatchItem'] = {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          format: 'uri',
+          description: 'Request path',
+        },
+        method: {
+          type: 'string',
+          enum: ['POST', 'GET'],
+          description: 'Request HTTP method',
+        },
+        params: {
+          type: 'object',
+          description:
+            'Request body (when method is POST) or query string parameters (when method is GET)',
+          additionalProperties: true,
+        },
+      },
+      additionalProperties: false,
+      required: ['path', 'method'],
+    };
+
+    router.route({
+      path: '/batch',
+      method: 'POST',
+      schemas: {
+        request: {
+          json: {
+            type: 'array',
+            items: {
+              $ref: mapToRef('BatchItem'),
+            },
+            minItems: 1,
+          },
+        },
+      },
+      async handler(request, serverContext) {
+        const body = await request.json();
+
+        if (body.length > sofa.batching.limit) {
+          return Response.json(
+            {
+              message: `Batching is limited to ${sofa.batching.limit} operations per request.`,
+            },
+            { status: 413, statusText: 'Content Too Large' }
+          );
+        }
+
+        const promises = body.map(
+          async ({
+            path,
+            method,
+            params,
+          }: {
+            path: string;
+            method: 'GET' | 'POST';
+            params?: Record<string, any>;
+          }) => {
+            const url = new URL(path, 'http://localhost');
+            const opts: RequestInit = { method };
+
+            if (params) {
+              if (method === 'GET') {
+                Object.entries(params).forEach(([key, value]) =>
+                  url.searchParams.append(key, value)
+                );
+              } else {
+                opts.body = JSON.stringify(params);
+              }
+            }
+
+            const req = new Request(url, opts);
+
+            const res = await router.handle(req, serverContext);
+
+            const responseBody = {
+              status: res.status,
+              body: await res.json(),
+            };
+
+            return responseBody;
+          }
+        );
+
+        const responses = await Promise.all(promises);
+        return Response.json(responses);
+      },
+    });
+  }
 
   return router;
 }

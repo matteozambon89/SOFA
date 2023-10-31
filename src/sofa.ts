@@ -42,6 +42,22 @@ export interface Route {
   responseStatus: StatusCode;
 }
 
+export type SofaBatchingConfig =
+  | boolean
+  | {
+      /**
+       * You can limit the number of batched operations per request.
+       *
+       * @default 10
+       */
+      limit?: number;
+    };
+
+export type SofaBatching = {
+  enabled: boolean;
+  limit: number;
+};
+
 export interface SofaConfig {
   basePath: string;
   schema: GraphQLSchema;
@@ -63,6 +79,7 @@ export interface SofaConfig {
   enumTypes?: Record<string, any>;
   exampleDirective?: string;
   exampleDirectiveParser?: ExampleDirectiveParser;
+  batching?: SofaBatchingConfig;
 
   openAPI?: RouterOpenAPIOptions<any>;
   swaggerUI?: RouterSwaggerUIOptions;
@@ -83,6 +100,7 @@ export interface Sofa {
   enumTypes: Record<string, any>;
   exampleDirective?: string;
   exampleDirectiveParser?: ExampleDirectiveParser;
+  batching: SofaBatching;
 
   openAPI?: RouterOpenAPIOptions<any>;
   swaggerUI?: RouterSwaggerUIOptions;
@@ -94,9 +112,17 @@ export function createSofa(config: SofaConfig): Sofa {
   const models = extractsModels(config.schema);
   const ignore = config.ignore || [];
   const depthLimit = config.depthLimit || 1;
+  const batching: SofaBatching = {
+    enabled: !!config.batching || false,
+    limit: 10,
+  };
+  if (typeof config.batching === 'object') {
+    batching.limit = config.batching.limit || 10;
+  }
 
   logger.debug(`[Sofa] models: ${models.join(', ')}`);
   logger.debug(`[Sofa] ignore: ${ignore.join(', ')}`);
+  logger.debug(`[Sofa] batching: ${JSON.stringify(batching)}`);
 
   return {
     execute,
@@ -117,6 +143,7 @@ export function createSofa(config: SofaConfig): Sofa {
     customScalars: config.customScalars || {},
     enumTypes: config.enumTypes || {},
     ...config,
+    batching,
   };
 }
 
