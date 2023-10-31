@@ -233,221 +233,265 @@ export function createRouter(sofa: Sofa) {
   });
 
   if (sofa.batching.enabled) {
-    sofa.openAPI.components.schemas['BatchItem'] = {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          format: 'uri',
-          description: 'Request path',
-        },
-        method: {
-          type: 'string',
-          enum: ['POST', 'GET'],
-          description: 'Request HTTP method',
-        },
-        params: {
-          type: 'object',
-          description:
-            'Request body (when method is POST) or query string parameters (when method is GET)',
-          additionalProperties: true,
-        },
-      },
-      additionalProperties: false,
-      required: ['path', 'method'],
-    };
-
-    router.route({
-      path: '/batch',
-      method: 'POST',
-      schemas: {
-        request: {
-          json: {
-            type: 'array',
-            items: {
-              $ref: mapToRef('BatchItem'),
-            },
-            minItems: 1,
-            maxItems: sofa.batching.limit,
-          },
-        },
-        responses: {
-          200: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                status: {
-                  type: 'integer',
-                  example: 200,
-                  description: 'Response HTTP status code',
-                },
-                data: {
-                  description: 'Response body',
-                  oneOf: [
-                    {
-                      type: 'object',
-                      additionalProperties: true,
-                    },
-                    { type: 'array', items: {} },
-                  ],
-                  example: {
-                    id: '01tP0000009xZvO',
-                    featureCode: 'D001',
-                    name: 'Phone Consultation',
-                    type: 'Phone Consultation',
-                    group: 'Consultations',
-                    defaultCallDuration: 60,
-                    defaultShortCallDuration: 30,
-                  },
-                },
-                errors: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    properties: {
-                      message: {
-                        type: 'string',
-                        description: 'Error message',
-                      },
-                    },
-                    required: ['message'],
-                    additionalProperties: true,
-                  },
-                  minItems: 1,
-                  maxItems: 1,
-                  example: [
-                    {
-                      message:
-                        'Product not found for given account and feature code',
-                      path: ['product'],
-                      extensions: {
-                        status: 'product_not_found_failure',
-                        metadata: {
-                          accountId: '001P0000020mmYFAKE',
-                          featureCode: 'D001',
-                        },
-                      },
-                    },
-                  ],
-                },
-              },
-              requires: ['status'],
-            },
-          },
-          413: {
-            type: 'object',
-            properties: {
-              errors: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    message: {
-                      type: 'string',
-                      description: 'Error message',
-                    },
-                  },
-                  required: ['message'],
-                },
-                minItems: 1,
-                maxItems: 1,
-                example: [
-                  {
-                    errors: [
-                      {
-                        message:
-                          'Batching is limited to X operations per request.',
-                      },
-                    ],
-                  },
-                ],
-              },
-            },
-            required: ['errors'],
-          },
-        },
-      },
-      async handler(request, serverContext) {
-        const body = await request.json();
-
-        if (body.length > sofa.batching.limit) {
-          throw createGraphQLError(
-            `Batching is limited to ${sofa.batching.limit} operations per request.`,
-            {
-              extensions: {
-                http: {
-                  status: 413,
-                },
-              },
-            }
-          );
-        }
-
-        const promises = body.map(
-          async ({
-            path,
-            method,
-            params,
-          }: {
-            path: string;
-            method: 'GET' | 'POST';
-            params?: Record<string, any>;
-          }) => {
-            const url = new URL(
-              `http://localhost/${sofa.basePath.replace(
-                /(^\/|\/$)/g,
-                ''
-              )}/${path.replace(/^\//, '')}`
-            );
-            const opts: RequestInit = { method };
-
-            if (params) {
-              if (method === 'GET') {
-                Object.entries(params).forEach(([key, value]) =>
-                  url.searchParams.append(key, value)
-                );
-              } else {
-                opts.body = JSON.stringify(params);
-              }
-            }
-
-            const res = await router.handle(
-              new Request(url, opts),
-              serverContext
-            );
-
-            if (res.status >= 300 && res.status < 400) {
-              return {
-                status: 404,
-                errors: [{ message: 'Request Not Found' }],
-              };
-            }
-
-            console.log('res', JSON.stringify(res));
-
-            const body = res.body ? await res.json() : {};
-
-            const errors = body.errors || undefined;
-            const data = !body.errors ? body : undefined;
-
-            const responseBody = {
-              status: res.status,
-              errors,
-              data,
-            };
-
-            return responseBody;
-          }
-        );
-
-        const responses = await Promise.all(promises);
-        return Response.json(responses);
-      },
-    });
+    createBatchHandler({ sofa, router });
   }
 
   return router;
+}
+
+function createBatchHandler({
+  sofa,
+  router,
+}: {
+  sofa: Sofa;
+  router: Router<any, {}, {}>;
+}) {
+  sofa.openAPI ||= {};
+  sofa.openAPI.components ||= {};
+  sofa.openAPI.components.schemas ||= {};
+
+  sofa.openAPI.components.schemas['BatchItem'] = {
+    type: 'object',
+    properties: {
+      path: {
+        type: 'string',
+        format: 'uri',
+        description: 'Request path',
+        example: '/my/path',
+      },
+      method: {
+        type: 'string',
+        enum: ['POST', 'GET'],
+        description: 'Request HTTP method',
+        example: 'GET',
+      },
+      params: {
+        type: 'object',
+        description:
+          'Request body (when method is POST) or query string parameters (when method is GET)',
+        additionalProperties: true,
+        example: {
+          prop1: 'foo',
+          prop2: 'bar',
+        },
+      },
+    },
+    additionalProperties: false,
+    required: ['path', 'method'],
+  };
+  sofa.openAPI.components.schemas['BatchResponseError'] = {
+    type: 'object',
+    properties: {
+      errors: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            message: {
+              type: 'string',
+              description: 'Error message',
+            },
+          },
+          required: ['message'],
+        },
+        minItems: 1,
+        maxItems: 1,
+      },
+    },
+    required: ['errors'],
+    example: {
+      errors: [
+        {
+          message: 'Batching is limited to X operations per request.',
+        },
+      ],
+    },
+  };
+  sofa.openAPI.components.schemas['BatchResponseItemSuccess'] = {
+    type: 'object',
+    properties: {
+      status: {
+        type: 'integer',
+        example: 200,
+        default: 200,
+        description: 'Response HTTP status code (always 200)',
+      },
+      data: {
+        description: 'Response body',
+        oneOf: [
+          {
+            type: 'object',
+            example: {
+              strProp: 'a-string',
+              intProp: 100,
+            },
+            additionalProperties: true,
+          },
+          {
+            type: 'array',
+            items: {},
+            example: [
+              {
+                strProp: 'a-string',
+                intProp: 100,
+              },
+            ],
+          },
+        ],
+      },
+    },
+    required: ['status', 'data'],
+  };
+  sofa.openAPI.components.schemas['BatchResponseItemError'] = {
+    type: 'object',
+    properties: {
+      status: {
+        type: 'integer',
+        example: 400,
+        description: 'Response HTTP status code (different than 200)',
+      },
+      errors: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            message: {
+              type: 'string',
+              description: 'Error message',
+            },
+          },
+          required: ['message'],
+          additionalProperties: true,
+        },
+        minItems: 1,
+        maxItems: 1,
+        example: [
+          {
+            message: 'Invalid parameters',
+          },
+        ],
+      },
+    },
+    required: ['status', 'errors'],
+  };
+
+  router.route({
+    path: '/batch',
+    method: 'POST',
+    schemas: {
+      request: {
+        json: {
+          type: 'array',
+          items: {
+            $ref: mapToRef('BatchItem'),
+          },
+          minItems: 1,
+          maxItems: sofa.batching.limit,
+        },
+      },
+      responses: {
+        200: {
+          type: 'array',
+          items: {
+            oneOf: [
+              {
+                $ref: mapToRef('BatchResponseItemSuccess'),
+              },
+              {
+                $ref: mapToRef('BatchResponseItemError'),
+              },
+            ],
+          },
+          minItems: 1,
+          maxItems: sofa.batching.limit,
+        },
+        413: {
+          $ref: mapToRef('BatchResponseError'),
+        },
+      },
+    },
+    handler: useBatchHandler({ sofa, router }),
+  });
+}
+
+function useBatchHandler({
+  sofa,
+  router,
+}: {
+  sofa: Sofa;
+  router: Router<any, {}, {}>;
+}): RouteHandler<{}, RouterRequest, any> {
+  return async function handler(request, serverContext) {
+    const body = await request.json();
+
+    if (body.length > sofa.batching.limit) {
+      throw createGraphQLError(
+        `Batching is limited to ${sofa.batching.limit} operations per request.`,
+        {
+          extensions: {
+            http: {
+              status: 413,
+            },
+          },
+        }
+      );
+    }
+
+    const promises = body.map(
+      async ({
+        path,
+        method,
+        params,
+      }: {
+        path: string;
+        method: 'GET' | 'POST';
+        params?: Record<string, any>;
+      }) => {
+        const url = new URL(
+          `http://localhost/${sofa.basePath.replace(
+            /(^\/|\/$)/g,
+            ''
+          )}/${path.replace(/^\//, '')}`
+        );
+        const opts: RequestInit = { method };
+
+        if (params) {
+          if (method === 'GET') {
+            Object.entries(params).forEach(([key, value]) =>
+              url.searchParams.append(key, value)
+            );
+          } else {
+            opts.body = JSON.stringify(params);
+          }
+        }
+
+        const res = await router.handle(new Request(url, opts), serverContext);
+
+        if (res.status >= 300 && res.status < 400) {
+          return {
+            status: 404,
+            errors: [{ message: 'Request Not Found' }],
+          };
+        }
+
+        const body = res.body ? await res.json() : {};
+
+        const errors = body.errors || undefined;
+        const data = !body.errors ? body : undefined;
+
+        const responseBody = {
+          status: res.status,
+          errors,
+          data,
+        };
+
+        return responseBody;
+      }
+    );
+
+    const responses = await Promise.all(promises);
+    return Response.json(responses);
+  };
 }
 
 function createQueryRoute({
