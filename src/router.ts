@@ -280,9 +280,13 @@ export function createRouter(sofa: Sofa) {
         if (body.length > sofa.batching.limit) {
           return Response.json(
             {
-              message: `Batching is limited to ${sofa.batching.limit} operations per request.`,
+              errors: [
+                {
+                  message: `Batching is limited to ${sofa.batching.limit} operations per request.`,
+                },
+              ],
             },
-            { status: 413, statusText: 'Content Too Large' }
+            { status: 413 }
           );
         }
 
@@ -296,7 +300,12 @@ export function createRouter(sofa: Sofa) {
             method: 'GET' | 'POST';
             params?: Record<string, any>;
           }) => {
-            const url = new URL(path, 'http://localhost');
+            const url = new URL(
+              `http://localhost/${sofa.basePath.replace(
+                /(^\/|\/$)/g,
+                ''
+              )}/${path.replace(/^\//, '')}`
+            );
             const opts: RequestInit = { method };
 
             if (params) {
@@ -309,13 +318,20 @@ export function createRouter(sofa: Sofa) {
               }
             }
 
-            const req = new Request(url, opts);
+            const res = await router.handle(
+              new Request(url, opts),
+              serverContext
+            );
 
-            const res = await router.handle(req, serverContext);
+            const body = res.body ? await res.json() : {};
+
+            const errors = body.errors || undefined;
+            const data = body.errors ? null : body;
 
             const responseBody = {
               status: res.status,
-              body: await res.json(),
+              errors,
+              data,
             };
 
             return responseBody;
