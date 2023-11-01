@@ -37,6 +37,12 @@ import {
 } from './open-api/operations';
 import { buildSchemaObjectFromType } from './open-api/types';
 import { addExampleFromDirective, mapToRef } from './open-api/utils';
+import {
+  BatchItemComponent,
+  BatchResponseErrorComponent,
+  BatchResponseItemErrorComponent,
+  BatchResponseItemSuccessComponent,
+} from './open-api/batch';
 
 export type ErrorHandler = (errors: ReadonlyArray<any>) => Response;
 
@@ -250,130 +256,13 @@ function createBatchHandler({
   sofa.openAPI.components ||= {};
   sofa.openAPI.components.schemas ||= {};
 
-  sofa.openAPI.components.schemas['BatchItem'] = {
-    type: 'object',
-    properties: {
-      path: {
-        type: 'string',
-        format: 'uri',
-        description: 'Request path',
-        example: '/my/path',
-      },
-      method: {
-        type: 'string',
-        enum: ['POST', 'GET'],
-        description: 'Request HTTP method',
-        example: 'GET',
-      },
-      params: {
-        type: 'object',
-        description:
-          'Request body (when method is POST) or query string parameters (when method is GET)',
-        additionalProperties: true,
-        example: {
-          prop1: 'foo',
-          prop2: 'bar',
-        },
-      },
-    },
-    additionalProperties: false,
-    required: ['path', 'method'],
-  };
-  sofa.openAPI.components.schemas['BatchResponseError'] = {
-    type: 'object',
-    properties: {
-      errors: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            message: {
-              type: 'string',
-              description: 'Error message',
-            },
-          },
-          required: ['message'],
-        },
-        minItems: 1,
-        maxItems: 1,
-      },
-    },
-    required: ['errors'],
-    example: {
-      errors: [
-        {
-          message: 'Batching is limited to X operations per request.',
-        },
-      ],
-    },
-  };
-  sofa.openAPI.components.schemas['BatchResponseItemSuccess'] = {
-    type: 'object',
-    properties: {
-      status: {
-        type: 'integer',
-        example: 200,
-        default: 200,
-        description: 'Response HTTP status code (always 200)',
-      },
-      data: {
-        description: 'Response body',
-        oneOf: [
-          {
-            type: 'object',
-            example: {
-              strProp: 'a-string',
-              intProp: 100,
-            },
-            additionalProperties: true,
-          },
-          {
-            type: 'array',
-            items: {},
-            example: [
-              {
-                strProp: 'a-string',
-                intProp: 100,
-              },
-            ],
-          },
-        ],
-      },
-    },
-    required: ['status', 'data'],
-  };
-  sofa.openAPI.components.schemas['BatchResponseItemError'] = {
-    type: 'object',
-    properties: {
-      status: {
-        type: 'integer',
-        example: 400,
-        description: 'Response HTTP status code (different than 200)',
-      },
-      errors: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            message: {
-              type: 'string',
-              description: 'Error message',
-            },
-          },
-          required: ['message'],
-          additionalProperties: true,
-        },
-        minItems: 1,
-        maxItems: 1,
-        example: [
-          {
-            message: 'Invalid parameters',
-          },
-        ],
-      },
-    },
-    required: ['status', 'errors'],
-  };
+  sofa.openAPI.components.schemas['BatchItem'] = BatchItemComponent;
+  sofa.openAPI.components.schemas['BatchResponseError'] =
+    BatchResponseErrorComponent;
+  sofa.openAPI.components.schemas['BatchResponseItemSuccess'] =
+    BatchResponseItemSuccessComponent;
+  sofa.openAPI.components.schemas['BatchResponseItemError'] =
+    BatchResponseItemErrorComponent;
 
   router.route({
     path: '/batch',
@@ -421,76 +310,85 @@ function useBatchHandler({
   sofa: Sofa;
   router: Router<any, {}, {}>;
 }): RouteHandler<{}, RouterRequest, any> {
-  return async function handler(request, serverContext) {
-    const body = await request.json();
+  const errorHandler: ErrorHandler = sofa.errorHandler || defaultErrorHandler;
 
-    if (body.length > sofa.batching.limit) {
-      throw createGraphQLError(
-        `Batching is limited to ${sofa.batching.limit} operations per request.`,
-        {
-          extensions: {
-            http: {
-              status: 413,
+  return async function handler(request, serverContext) {
+    try {
+      const body = await request.json();
+
+      if (body.length > sofa.batching.limit) {
+        throw createGraphQLError(
+          `Batching is limited to ${sofa.batching.limit} operations per request.`,
+          {
+            extensions: {
+              http: {
+                status: 413,
+              },
             },
-          },
+          }
+        );
+      }
+
+      const promises = body.map(
+        async ({
+          path,
+          method,
+          params,
+        }: {
+          path: string;
+          method: 'GET' | 'POST';
+          params?: Record<string, any>;
+        }) => {
+          const url = new URL(
+            `http://localhost/${sofa.basePath.replace(
+              /(^\/|\/$)/g,
+              ''
+            )}/${path.replace(/^\//, '')}`
+          );
+          const opts: RequestInit = { method };
+
+          if (params) {
+            if (method === 'GET') {
+              Object.entries(params).forEach(([key, value]) =>
+                url.searchParams.append(key, value)
+              );
+            } else {
+              opts.body = JSON.stringify(params);
+            }
+          }
+
+          const res = await router.handle(
+            new Request(url, opts),
+            serverContext
+          );
+
+          if (res.status >= 300 && res.status < 400) {
+            return {
+              status: 404,
+              errors: [{ message: 'Request Not Found' }],
+            };
+          }
+
+          const body = res.body ? await res.json() : {};
+
+          const errors = body.errors || undefined;
+          const data = !body.errors ? body : undefined;
+
+          const responseBody = {
+            status: res.status,
+            errors,
+            data,
+          };
+
+          return responseBody;
         }
       );
+
+      const responses = await Promise.all(promises);
+      return Response.json(responses);
+    } catch (error: any) {
+      return errorHandler([error]);
     }
-
-    const promises = body.map(
-      async ({
-        path,
-        method,
-        params,
-      }: {
-        path: string;
-        method: 'GET' | 'POST';
-        params?: Record<string, any>;
-      }) => {
-        const url = new URL(
-          `http://localhost/${sofa.basePath.replace(
-            /(^\/|\/$)/g,
-            ''
-          )}/${path.replace(/^\//, '')}`
-        );
-        const opts: RequestInit = { method };
-
-        if (params) {
-          if (method === 'GET') {
-            Object.entries(params).forEach(([key, value]) =>
-              url.searchParams.append(key, value)
-            );
-          } else {
-            opts.body = JSON.stringify(params);
-          }
-        }
-
-        const res = await router.handle(new Request(url, opts), serverContext);
-
-        if (res.status >= 300 && res.status < 400) {
-          return {
-            status: 404,
-            errors: [{ message: 'Request Not Found' }],
-          };
-        }
-
-        const body = res.body ? await res.json() : {};
-
-        const errors = body.errors || undefined;
-        const data = !body.errors ? body : undefined;
-
-        const responseBody = {
-          status: res.status,
-          errors,
-          data,
-        };
-
-        return responseBody;
-      }
-    );
-
-    const responses = await Promise.all(promises);
-    return Response.json(responses);
   };
 }
 
