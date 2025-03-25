@@ -1,5 +1,6 @@
 import {
   FieldNode,
+  GraphQLEnumType,
   GraphQLSchema,
   isEnumType,
   Kind,
@@ -108,6 +109,22 @@ export function buildPathFromOperation({
   };
 }
 
+function makeEnumDescription(enumType: GraphQLEnumType): string {
+  const description = [enumType.description];
+
+  description.push('');
+  description.push('| Enum Value | Description |');
+  description.push('| --- | --- |');
+
+  const enumValuesDescriptions = enumType
+    .getValues()
+    .map((value) => `| ${value.name} | ${value.description} |`);
+
+  description.push(...enumValuesDescriptions);
+
+  return description.join('\n');
+}
+
 function resolveEnumTypes(schema: GraphQLSchema): Record<string, any> {
   const enumTypes = Object.values(schema.getTypeMap()).filter(isEnumType);
   return Object.fromEntries(
@@ -115,6 +132,7 @@ function resolveEnumTypes(schema: GraphQLSchema): Record<string, any> {
       type.name,
       {
         type: 'string',
+        description: makeEnumDescription(type),
         enum: type.getValues().map((value) => value.name),
       },
     ])
