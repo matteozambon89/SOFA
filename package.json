@@ -1,7 +1,7 @@
 {
   "name": "sofa-api",
   "description": "Create REST APIs with GraphQL",
-  "version": "0.18.1-unreleased.8",
+  "version": "0.18.1-unreleased.9",
   "buildOptions": {
     "input": "./src/index.ts"
   },
@@ -65,6 +65,7 @@
     "build": "bob build",
     "postbuild": "git checkout -- .",
     "build:local": "rm -rf dist/* && bob bootstrap && bob build && git checkout -- .",
+    "pack:local": "yarn build:local && ./fixup && cd dist && yarn pack && cp *.tgz ..",
     "test": "jest --no-watchman",
     "release": "yarn build && changeset publish",
     "postinstall": "husky install"
