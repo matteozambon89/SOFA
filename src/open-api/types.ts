@@ -10,7 +10,7 @@ import {
   isEnumType,
   GraphQLType,
 } from 'graphql';
-import { addExampleFromDirective, mapToPrimitive, mapToRef } from './utils';
+import { addExampleFromDirective, mapToRef } from './utils';
 import { Sofa } from '../sofa';
 
 export function buildSchemaObjectFromType(
