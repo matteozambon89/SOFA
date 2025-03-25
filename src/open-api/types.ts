@@ -10,7 +10,7 @@ import {
   isEnumType,
   GraphQLType,
 } from 'graphql';
-import { addExampleFromDirective, mapToRef } from './utils';
+import { addExampleFromDirective, mapToPrimitive, mapToRef } from './utils';
 import { Sofa } from '../sofa';
 
 export function buildSchemaObjectFromType(
@@ -99,15 +99,14 @@ export function resolveFieldType(
   }
 
   if (isScalarType(type)) {
-    // const resolved = mapToPrimitive(type.name) ||
-    //   type.extensions?.jsonSchema || {
-    //     type: 'object',
-    //   };
-    // return { ...resolved };
-
-    return {
-      $ref: mapToRef(type.name),
-    };
+    const resolved = mapToPrimitive(type.name) ||
+      type.extensions?.jsonSchema || {
+        $ref: mapToRef(type.name),
+      };
+    // || {
+    //   type: 'object',
+    // };
+    return { ...resolved };
   }
 
   if (isEnumType(type)) {
