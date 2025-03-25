@@ -2,7 +2,6 @@ import {
   FieldNode,
   GraphQLEnumType,
   GraphQLSchema,
-  isEnumType,
   Kind,
   ObjectTypeDefinitionNode,
   OperationDefinitionNode,
@@ -31,7 +30,7 @@ export function buildPathFromOperation({
   exampleDirectiveParser,
 }: OpenAPIBuildPathFromOperationOpts): OpenAPIV3.OperationObject {
   const info = getOperationInfo(operation)!;
-  const enumTypes = resolveEnumTypes(schema);
+  const enumTypes = {}; // ! removed as we want to use the schema ref for all enums (was: "resolveEnumTypes(schema);")
 
   const summary = resolveDescription(schema, info.operation);
   const variables = info.operation.variableDefinitions;
@@ -125,19 +124,23 @@ function makeEnumDescription(enumType: GraphQLEnumType): string {
   return description.join('\n');
 }
 
-function resolveEnumTypes(schema: GraphQLSchema): Record<string, any> {
-  const enumTypes = Object.values(schema.getTypeMap()).filter(isEnumType);
-  return Object.fromEntries(
-    enumTypes.map((type) => [
-      type.name,
-      {
-        type: 'string',
-        description: makeEnumDescription(type),
-        enum: type.getValues().map((value) => value.name),
-      },
-    ])
-  );
+export function resolveEnumType(
+  enumType: GraphQLEnumType
+): Record<string, any> {
+  return {
+    type: 'string',
+    description: makeEnumDescription(enumType),
+    enum: enumType.getValues().map((value) => value.name),
+  };
 }
+
+// ! see buildPathFromOperation for reason
+// function resolveEnumTypes(schema: GraphQLSchema): Record<string, any> {
+//   const enumTypes = Object.values(schema.getTypeMap()).filter(isEnumType);
+//   return Object.fromEntries(
+//     enumTypes.map((type) => [type.name, resolveEnumType(type)])
+//   );
+// }
 
 function resolveParameters(
   url: string,

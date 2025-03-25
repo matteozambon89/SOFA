@@ -7,6 +7,7 @@ import {
   isIntrospectionType,
   isInputObjectType,
   GraphQLField,
+  isEnumType,
 } from 'graphql';
 import {
   buildOperationNodeForField,
@@ -30,6 +31,7 @@ import {
 import { HTTPMethod, StatusCode } from 'fets/typings/typed-fetch';
 import {
   isInPath,
+  resolveEnumType,
   resolveParamSchema,
   resolveRequestBody,
   resolveResponse,
@@ -132,6 +134,17 @@ export function createRouter(sofa: Sofa) {
           description: type.description,
           ...sofa.customScalars[typeName],
         },
+        type,
+        {
+          schema: sofa.schema,
+          exampleDirective: sofa.exampleDirective,
+          exampleDirectiveParser: sofa.exampleDirectiveParser,
+        }
+      );
+    } else if (!isIntrospectionType(type) && isEnumType(type)) {
+      //* This creates any customScalar as a component reducing the amount of duplication
+      sofa.openAPI.components.schemas[typeName] = addExampleFromDirective(
+        resolveEnumType(type),
         type,
         {
           schema: sofa.schema,
