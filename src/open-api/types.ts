@@ -99,17 +99,25 @@ export function resolveFieldType(
   }
 
   if (isScalarType(type)) {
-    const resolved = mapToPrimitive(type.name) ||
-      type.extensions?.jsonSchema || {
-        type: 'object',
-      };
-    return { ...resolved };
+    // const resolved = mapToPrimitive(type.name) ||
+    //   type.extensions?.jsonSchema || {
+    //     type: 'object',
+    //   };
+    // return { ...resolved };
+
+    return {
+      $ref: mapToRef(type.name),
+    };
   }
 
   if (isEnumType(type)) {
+    // return {
+    //   type: 'string',
+    //   enum: type.getValues().map((value) => value.name),
+    // };
+
     return {
-      type: 'string',
-      enum: type.getValues().map((value) => value.name),
+      $ref: mapToRef(type.name),
     };
   }
 
